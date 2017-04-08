@@ -21,16 +21,29 @@ type configSection struct {
 Config holds the contents of an ini file organized into sections.
 */
 type Config struct {
+	options Options
+
 	configSection
 	sections map[string]*configSection
+}
+
+type Options struct {
+	StringValueEscaping bool
+}
+
+var DefaultOptions = Options{
+	StringValueEscaping: true,
 }
 
 /*
 LoadConfiguration takes a path, treats it as a file and scans it for an ini configuration.
 */
 func LoadConfiguration(path string) (*Config, error) {
+	return LoadConfigurationWithOptions(path, DefaultOptions)
+}
 
-	config := new(Config)
+func LoadConfigurationWithOptions(path string, opts Options) (*Config, error) {
+	config := &Config{options: opts}
 	err := config.InitializeFromPath(path)
 
 	if err != nil {
@@ -44,8 +57,12 @@ LoadConfigurationFromReader takes a reader and scans it for an ini configuration
 The caller should close the reader.
 */
 func LoadConfigurationFromReader(input io.Reader) (*Config, error) {
+	return LoadConfigurationFromReaderWithOptions(input, DefaultOptions)
+}
 
-	config := new(Config)
+func LoadConfigurationFromReaderWithOptions(input io.Reader, opts Options) (*Config, error) {
+
+	config := &Config{options: opts}
 	err := config.InitializeFromReader(input)
 
 	if err != nil {
@@ -205,21 +222,30 @@ func getArray(values map[string]interface{}, key string) []interface{} {
 	return nil
 }
 
-func getString(values map[string]interface{}, key string, def string) string {
+func getString(values map[string]interface{},
+	key string, def string, escaped bool) string {
 
 	val := get(values, key)
 
+	var (
+		err error
+		str string
+	)
 	if val != nil {
-		str, err := strconv.Unquote(fmt.Sprintf("\"%v\"", val))
-
-		if err == nil {
-			return str
+		if escaped {
+			str, err = strconv.Unquote(fmt.Sprintf("\"%v\"", val))
+			if err != nil {
+				return def
+			}
+		} else {
+			str = fmt.Sprint(val)
 		}
-
-		return def
 	}
 
-	return def
+	if str == "" {
+		return def
+	}
+	return str
 }
 
 func getBoolean(values map[string]interface{}, key string, def bool) bool {
@@ -270,19 +296,34 @@ func getFloat(values map[string]interface{}, key string, def float64) float64 {
 	return def
 }
 
-func getStrings(values map[string]interface{}, key string) []string {
+func getStrings(values map[string]interface{},
+	key string, escaped bool) []string {
 
 	val := getArray(values, key)
 
 	if val != nil {
-		retVal := make([]string, len(val))
+		var retVal []string
 
-		var err error
-		for i, v := range val {
-			retVal[i], err = strconv.Unquote(fmt.Sprintf("\"%v\"", v))
-			if err != nil {
-				return nil
+		var (
+			str string
+			err error
+		)
+		for _, v := range val {
+			if escaped {
+				str, err = strconv.Unquote(fmt.Sprintf("\"%v\"", v))
+				if err != nil {
+					return nil
+				}
+			} else {
+				str = fmt.Sprint(v)
 			}
+
+			// Don't include empty string values
+			if str == "" {
+				continue
+			}
+
+			retVal = append(retVal, str)
 		}
 		return retVal
 	}
@@ -334,7 +375,7 @@ func getFloats(values map[string]interface{}, key string) []float64 {
 String looks for the specified key and returns it as a string. If not found the default value def is returned.
 */
 func (config *Config) String(key string, def string) string {
-	return getString(config.values, key, def)
+	return getString(config.values, key, def, config.options.StringValueEscaping)
 }
 
 /*
@@ -363,7 +404,7 @@ Strings looks for an array of strings under the provided key.
 If no matches are found nil is returned. If only one matches an array of 1 is returned.
 */
 func (config *Config) Strings(key string) []string {
-	return getStrings(config.values, key)
+	return getStrings(config.values, key, config.options.StringValueEscaping)
 }
 
 /*
@@ -399,7 +440,7 @@ func (config *Config) StringFromSection(sectionName string, key string, def stri
 	section := config.sectionForName(sectionName)
 
 	if section != nil {
-		return getString(section.values, key, def)
+		return getString(section.values, key, def, config.options.StringValueEscaping)
 	}
 
 	return def
@@ -460,7 +501,7 @@ func (config *Config) StringsFromSection(sectionName string, key string) []strin
 	section := config.sectionForName(sectionName)
 
 	if section != nil {
-		return getStrings(section.values, key)
+		return getStrings(section.values, key, config.options.StringValueEscaping)
 	}
 
 	return nil
@@ -540,7 +581,7 @@ func (config *Config) DataFromSection(sectionName string, data interface{}) bool
 		case reflect.Float64:
 			field.SetFloat(getFloat(values, fieldName, field.Interface().(float64)))
 		case reflect.String:
-			field.SetString(getString(values, fieldName, field.Interface().(string)))
+			field.SetString(getString(values, fieldName, field.Interface().(string), config.options.StringValueEscaping))
 		case reflect.Array, reflect.Slice:
 			switch fieldType.Type.Elem().Kind() {
 			case reflect.Int64:
@@ -554,7 +595,7 @@ func (config *Config) DataFromSection(sectionName string, data interface{}) bool
 					field.Set(reflect.ValueOf(floats))
 				}
 			case reflect.String:
-				strings := getStrings(values, fieldName)
+				strings := getStrings(values, fieldName, config.options.StringValueEscaping)
 				if strings != nil {
 					field.Set(reflect.ValueOf(strings))
 				}

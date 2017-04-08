@@ -1,11 +1,12 @@
 package mini
 
 import (
-	"github.com/stretchr/testify/assert"
 	"os"
 	"path"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSimpleIniFile(t *testing.T) {
@@ -438,7 +439,7 @@ first=beta`
 func TestDefaults(t *testing.T) {
 
 	simpleIni := `first=alpha
-third=\`
+third=`
 
 	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
 
@@ -709,28 +710,118 @@ func TestNullValuesInGet(t *testing.T) {
 
 }
 
-func TestStringEscape(t *testing.T) {
+func TestEscapedStringWithValidEscapes(t *testing.T) {
 
 	simpleIni := `first=\n\t\rhello`
 
-	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
+	opts := Options{StringValueEscaping: true}
+	config, err := LoadConfigurationFromReaderWithOptions(strings.NewReader(simpleIni), opts)
 
 	assert.Nil(t, err, "Simple configuration should load without error.")
 
-	assert.Equal(t, config.String("first", ""), "\n\t\rhello", "Read value of first wrong")
+	assert.Equal(t, "\n\t\rhello", config.String("first", ""), "Read value of first wrong")
 
 	assert.Equal(t, len(config.Keys()), 1, "ini contains 1 fields")
 }
 
-func TestBadStringArray(t *testing.T) {
+func TestEscapedStringWithInvalidEscapes(t *testing.T) {
 
-	simpleIni := `first[]=\`
+	simpleIni := `first=\z\x\ hello`
+
+	opts := Options{StringValueEscaping: true}
+	config, err := LoadConfigurationFromReaderWithOptions(strings.NewReader(simpleIni), opts)
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+
+	assert.Equal(t, "a", config.String("first", "a"), "String with invalid escapes should yield default value")
+
+	assert.Equal(t, len(config.Keys()), 1, "ini contains 1 fields")
+}
+
+func TestUnescapedStringWithValidEscapes(t *testing.T) {
+
+	value := `\n\t\rhello`
+	simpleIni := "first=" + value
+
+	opts := Options{StringValueEscaping: false}
+	config, err := LoadConfigurationFromReaderWithOptions(strings.NewReader(simpleIni), opts)
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+
+	assert.Equal(t, value, config.String("first", ""), "With string escaping disabled, verbatim value should be yielded")
+
+	assert.Equal(t, len(config.Keys()), 1, "ini contains 1 fields")
+}
+
+func TestUnescapedStringWithInvalidEscapes(t *testing.T) {
+
+	value := `\z\x\ hello`
+	simpleIni := "first=" + value
+
+	opts := Options{StringValueEscaping: false}
+	config, err := LoadConfigurationFromReaderWithOptions(strings.NewReader(simpleIni), opts)
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+	assert.Equal(t, value, config.String("first", ""), "With string escaping disabled, verbatim value should be yielded")
+	assert.Equal(t, len(config.Keys()), 1, "ini contains 1 fields")
+}
+
+func TestStringWithEmptyValue(t *testing.T) {
+
+	simpleIni := `first=`
 
 	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
 
 	assert.Nil(t, err, "Simple configuration should load without error.")
-	assert.Nil(t, config.Strings("first"), "Read value of first wrong")
+	assert.Equal(t, "x", config.String("first", "x"), "String with empty value did not yield specified default")
+	assert.Equal(t, len(config.Keys()), 1, "ini contains 1 fields")
 }
+
+func TestSingleElementStringArrayWithValue(t *testing.T) {
+
+	simpleIni := `foo[]=a`
+
+	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+	assert.Equal(t, []string{"a"}, config.Strings("foo"), "String array yielded wrong number of elements")
+	assert.Equal(t, 1, len(config.Keys()), "String array not considered to be a single key")
+}
+
+func TestSingleElementStringArrayWithEmptyValue(t *testing.T) {
+
+	simpleIni := `foo[]=`
+
+	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+	assert.Nil(t, config.Strings("foo"), "Read value of foo wrong")
+	assert.Equal(t, 1, len(config.Keys()), "String array not considered to be a single key")
+}
+
+func TestMultiElementStringArray(t *testing.T) {
+
+	simpleIni := "foo[]=a\nfoo[]=bb\nfoo[]=ccc"
+
+	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+	assert.Equal(t, []string{"a", "bb", "ccc"}, config.Strings("foo"), "String array yielded wrong number of elements")
+	assert.Equal(t, 1, len(config.Keys()), "String array not considered to be a single key")
+}
+
+func TestMultiElementStringArrayWithEmptyValue(t *testing.T) {
+
+	simpleIni := "foo[]=a\nfoo[]=bb\nfoo[]=\nfoo[]=dddd"
+
+	config, err := LoadConfigurationFromReader(strings.NewReader(simpleIni))
+
+	assert.Nil(t, err, "Simple configuration should load without error.")
+	assert.Equal(t, []string{"a", "bb", "dddd"}, config.Strings("foo"), "String array yielded wrong number of elements")
+	assert.Equal(t, 1, len(config.Keys()), "String array not considered to be a single key")
+}
+
+// TODO(DH): More string array tests
 
 func BenchmarkLoadConfiguration(b *testing.B) {
 
